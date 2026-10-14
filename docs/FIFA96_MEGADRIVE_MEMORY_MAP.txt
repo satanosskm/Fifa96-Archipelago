@@ -1,0 +1,1020 @@
+FIFA 96 FOR MEGA DRIVE / GENESIS
+MEMORY MAP AND REVERSE-ENGINEERING REFERENCE
+
+Revision: 1.1
+Date: 2026-10-15
+Audience: ROM hackers, 68000 debugger users, and RetroAchievements authors
+
+PURPOSE AND SCOPE
+-----------------
+This document consolidates the FIFA 96 Mega Drive addresses and values mapped
+in the local reverse-engineering work. It separates retail-ROM data, 68000 RAM,
+static code locations, and Archipelago-only additions. It is not a claim that
+all entries apply to every regional release, ROM revision, emulator core, or
+patched image.
+
+The document was prepared by reading existing source, reports, captures, and
+logs and by recalculating the vanilla ROM hashes and header checksum. No game,
+emulator, client, server, or runtime test was launched to prepare this revision.
+
+IMPORTANT: A memory location belonging to an Archipelago (AP) patch is not a
+vanilla-game field. Such entries are explicitly marked AP-ONLY or BUILD-SPECIFIC.
+
+CONTENTS
+--------
+1. Evidence and confidence labels
+2. Vanilla ROM identity
+3. Addressing and data conventions
+4. Vanilla ROM header and data tables
+5. 68K RAM map
+6. Screen and task signatures
+7. SELECT TEAM tabs and LEAGUE_MASK
+8. Game Settings and Special values
+9. Match scores, clock, and end-of-match limits
+10. Champions/AP extension map
+11. ROM code locations and historical patch references
+12. Candidates, invalidated leads, and build divergences
+13. Standalone use and patch safety
+
+1. EVIDENCE AND CONFIDENCE LABELS
+---------------------------------
+CONFIRMED-RUNTIME
+  The value was read or changed by the running game in an existing BizHawk or
+  MAME trace, or was correlated with a real gameplay event. This describes the
+  cited build and test conditions; it does not automatically prove every build.
+
+CONFIRMED-STATIC
+  The bytes, instruction, pointer table, or address expression was verified in
+  ROM or disassembly. Runtime meaning may still be untested.
+
+STRONG
+  Several independent observations agree, but an edge case, build, or field
+  width is still open.
+
+CANDIDATE
+  An address or interpretation worth investigating. Do not build an achievement
+  or patch around it without additional verification.
+
+INVALIDATED
+  A prior interpretation was disproved or is known to target the wrong field.
+
+AP-ONLY
+  Created, reserved, or written by the project patcher/client. It is not an
+  original FIFA 96 variable, even when the same MD CART or RAM domain is used.
+
+BUILD-SPECIFIC / HISTORICAL
+  Applies to a named AP base or earlier prototype. Do not assume the bytes are
+  present in vanilla or in another patch revision.
+
+2. VANILLA ROM IDENTITY
+-----------------------
+Vanilla image used as the source of truth:
+
+  File name:      fifa96_vanilla.md (raw ROM image; .md is the project extension)
+  Size:           2,097,152 bytes (0x200000; 2 MiB)
+  Header title:   FIFA Soccer '96
+  Product field:  GM T-172086-00
+  Region set:     USA/Europe multi-language dump (English, French, German,
+                  Spanish, Italian, and Swedish)
+
+Hashes recalculated from the preserved vanilla image:
+
+  MD5:    545b07c1c599f49ea93a4b7b2c7c3782
+  SHA-1:  a7fcfe478b368d7d33bcbca65245f5faed9a1e07
+  SHA-256: 6a4d606c6f1fa8930e00d317dc8d3edee8f54ac2df2ac835bcb6be6777c35b01
+
+The upload copy is byte-identical to the workspace vanilla image. The SHA-256
+above identifies the unpatched 2 MiB image, not an AP ROM or a save file.
+
+The stored Genesis checksum is 0xC9C0 at ROM offsets 0x18E-0x18F. Recalculation
+as the sum of big-endian 16-bit words from 0x200 through end-of-file, truncated
+to 16 bits, also yields 0xC9C0. Recalculate the checksum after any ROM edit.
+
+3. ADDRESSING AND DATA CONVENTIONS
+----------------------------------
+3.1 Three address spaces; do not mix them
+
+A. ROM file / BizHawk MD CART offset
+   - The ROM image is 0x200000 bytes long.
+   - The MD CART domain uses file offsets from 0x000000 through 0x1FFFFF.
+   - All ROM offsets in this document are explicitly called ROM offsets or
+     MD CART offsets. They are not 68K RAM addresses.
+
+B. MAME 68000 bus address
+   - Main work RAM is observed in the 0xFF0000-0xFFFFFF window.
+   - Examples: MAME 0xFF03E7, 0xFFE320, and 0xFFF8B5.
+   - Task data pointers are often stored as 32-bit sign-extended values such as
+     0xFFFF0012; that value is a pointer value, not a ROM file offset.
+
+C. BizHawk 68K RAM domain offset
+   - The BizHawk 68K RAM domain is 0x10000 bytes and is base-zero.
+   - For the mapped RAM window, the offset is the low 16 bits of the MAME
+     address: 0xFF03E7 -> 0x03E7; 0xFFE320 -> 0xE320.
+   - In a table, the BizHawk offset and MAME bus address are shown separately.
+
+3.2 Width and byte order
+
+The 68000 is big-endian. A 16-bit word is stored high byte first; a 32-bit
+longword is stored most-significant byte first. A byte has no endian order.
+Widths below are the width of the mapped field or the read used in the cited
+source; an unknown width is stated as unknown rather than guessed.
+
+For example, a score at MAME 0xFFF8B5 is one byte at BizHawk 68K RAM offset
+0xF8B5. A SELECT TEAM tab at MAME 0xFF03B0 is a 16-bit word at offset 0x03B0.
+
+3.3 Runtime register bases
+
+- A4 was observed as 0xFF0012 in the SELECT TEAM code path. Thus A4+$39E is
+  MAME 0xFF03B0, and A4+$3A0 is 0xFF03B2.
+- A5 was observed as 0x00000772 in the relevant disassembly. An A5-relative
+  displacement is signed. Derived addresses below are valid only for that A5
+  context; A5 is a CPU register, not a fixed global RAM base for every routine.
+- ROM disassembly addresses such as 0x7F00 or 0x91BCE are file offsets in the
+  local mapping unless the text explicitly labels them as runtime RAM.
+
+4. VANILLA ROM HEADER AND DATA TABLES
+-------------------------------------
+4.1 Header fields
+
+ROM offset | Width | Vanilla value / meaning | Evidence
+-----------|-------|-------------------------|---------
+0x000100   | 16 B  | ASCII "SEGA GENESIS" plus padding | CONFIRMED-STATIC
+0x000120   | 48 B  | Domestic title: "FIFA Soccer '96" plus spaces | CONFIRMED-STATIC
+0x000150   | 48 B  | Overseas title: "FIFA Soccer '96" plus spaces | CONFIRMED-STATIC
+0x000180   | 14 B  | Product field: "GM T-172086-00" | CONFIRMED-STATIC
+0x00018E   | 2 B   | Cartridge checksum: 0xC9C0, big-endian | CONFIRMED-STATIC
+0x0001A0   | 4 B   | ROM start address field: 0x00000000 | CONFIRMED-STATIC
+0x0001A4   | 4 B   | ROM end address field: 0x001FFFFF | CONFIRMED-STATIC
+0x0001B0   | 12 B  | Header contains an "RA" save-RAM descriptor | STATIC ONLY
+
+The "RA" bytes at 0x1B0 are header metadata. This map does not claim that the
+header alone identifies the live save-RAM contents or the exact persistence
+behavior of user SRAM.
+
+4.2 Team records
+
+The vanilla team-record table is mapped as follows:
+
+  Base ROM offset:      0x1314DA
+  Record count:         240 (IDs 0 through 239)
+  Record stride:        0x26 bytes (38 decimal)
+  Record name:          record + 0x00, up to 0x10 bytes
+  Palette selectors:    record + 0x10, 3 bytes
+  Last record start:    0x133854 (ID 239)
+  End of table:         0x13387A (exclusive)
+
+The name bytes use the game's character encoding; they are not guaranteed to
+be plain ASCII. The three palette bytes are selectors, not RGB colors. The
+remaining 0x13 bytes of each record are not fully decoded here.
+
+Examples checked against the vanilla image:
+
+  Team ID 9   Arsenal  ROM record 0x131630  palette 03/0B/0B
+  Team ID 80  France   ROM record 0x1320BA  palette 02/0B/03
+  Team ID 85  Germany  ROM record 0x132178  palette 07/03/04
+  Team ID 234 Zambia   ROM record 0x133796  palette 00/06/03
+
+Address formula: 0x1314DA + (team_id * 0x26). The Champions AP display hook
+uses this table for both name and palette selection. The AP-only team-ID byte
+is described in section 10; it is not part of the vanilla team record.
+
+4.3 Confederation/team grouping table
+
+ROM offset 0x14A800 is identified in project notes as the start of a two-byte
+per-team grouping table, described historically as (conf_id, team_id). Team
+IDs in that table were reported unchanged in a patched base while grouping
+IDs were reassigned. The exact table extent, field ordering, and group-ID to
+visible-tab relationship are not sufficiently consistent across build notes to
+use this table as a stand-alone tab lookup. Treat it as CONFIRMED-STATIC for the
+observed bytes and CANDIDATE for broad semantic use. Do not assume that a
+conf_id is always numerically equal to a SELECT TEAM tab index.
+
+4.4 Vanilla strings and patched string locations
+
+The following are vanilla strings in the raw ROM. AP base patches can repurpose
+some of the same storage and update pointer tables; the patched label at an
+offset must not be read as the vanilla label.
+
+ROM offset | Vanilla string
+-----------|--------------
+0x0FD102  | World
+0x0FD108  | Custom
+0x0FD10F  | Cup Winners Cup
+0x0FD11F  | Nations Cup
+0x0FD12B  | Winners Cup
+0x0FD137  | SELECT LEAGUE
+0x0FD145  | SELECT TOURNAMENT
+0x0FD157  | SELECT PLAYOFF
+0x0FD166  | SELECT TEAMS
+0x0FD173  | SCOUTING REPORT
+0x0FD183  | PRE GAME
+0x0FD18C  | GAME PAUSED
+0x0FD70D  | Free Slot
+0x0FD717  | Enter Team Name
+0x0FD727  | Friendly
+0x0FD730  | Leagues
+0x0FD738  | Tournaments
+0x0FD744  | Playoffs
+0x0FD74D  | Practise
+0x0FD756  | Options
+0x0FD75E  | Game Settings
+0x0FD76C  | Custom League
+0x0FD77A  | Custom Tournament
+0x0FD78C  | Custom Playoff
+0x0FD79B  | Custom Teams
+0x0FD7A8  | Custom Players
+
+Other string-related structures:
+
+- ROM 0x0FCA40: big-endian halfword table used by the current AP source for
+  dynamic tab-label lookup; its stated relation is text_id = tab + 11. This is
+  not a RAM array. The exact pointer base should be checked against the target
+  build before repurposing its entries.
+- ROM 0x0FCB8D and following: big-endian halfword pointer/offset table updated
+  in historical base patches when strings move. The pointer encoding is not
+  fully documented here.
+- ROM 0x0FD102 onward: the vanilla strings above. In the AP base family this
+  storage is repurposed for confederation labels. Current source comments map
+  the tab labels to the following patched string starts: AFC at 0x0FD102,
+  blank at 0x0FD108, CAF at 0x0FD10F, CONCACAF at 0x0FD11F, CONMEBOL at
+  0x0FD12B, OFC at 0x0FD137, and UEFA at 0x0FD145. This patched mapping is
+  BUILD-SPECIFIC and differs from the vanilla strings at the same offsets.
+- ROM 0x0FD727 is "Friendly" in vanilla and the 11-byte marker string
+  "Archipelago" in the AP base used by the client.
+- ROM 0x0FD733, 0x0FD73B, 0x0FD743, and 0x0FD74B are historical AP placeholder
+  positions. One AP base replaced the "Removed" placeholders with zero-filled
+  bytes at these locations; this is a patch layout, not a vanilla string map.
+- ROM 0x0FD76C is "Custom League" in vanilla and was renamed "Special" in the
+  AP base family.
+- ROM 0x1314AE contains a residual vanilla "World" string according to the
+  historical patch notes; it is outside the menu string block described above.
+
+5. 68K RAM MAP
+--------------
+All addresses in this section are work-RAM addresses. The BizHawk column is the
+base-zero 68K RAM domain offset; the MAME column is the corresponding full bus
+address. Widths are bytes unless specified. Word and longword values are
+big-endian.
+
+5.1 Screen and menu state
+
+BizHawk offset | MAME address | Width | Mapped value / role | Status
+---------------|--------------|-------|--------------------|-------
+0x03E7         | 0xFF03E7     | 1 B   | Screen ID E7       | CONFIRMED-RUNTIME
+0x03E8         | 0xFF03E8     | 1 B   | Additional screen/phase guard; 0x00 in SELECT TEAM | CONFIRMED-RUNTIME
+0x03F5         | 0xFF03F5     | 1 B   | Screen phase/substate F5 | CONFIRMED-RUNTIME
+0x038C         | 0xFF038C     | 1 B   | Game Settings selected-row index; observed 0, 5, 11 | STRONG
+
+The screen bytes form useful signatures, not a universal state API. See section
+6 for the observed pairs and their limitations.
+
+5.2 SELECT TEAM fields
+
+BizHawk offset | MAME address | Width | Mapped value / role | Status
+---------------|--------------|-------|--------------------|-------
+0x03B0         | 0xFF03B0     | 2 B   | P1 panel tab index; big-endian word | CONFIRMED-RUNTIME
+0x03B2         | 0xFF03B2     | 2 B   | P2/opponent panel tab index; big-endian word | CONFIRMED-RUNTIME
+0x03B4         | 0xFF03B4     | 2 B   | P1/Home team-record index during SELECT TEAM | STRONG
+0x03BC         | 0xFF03BC     | 2 B   | SELECT TEAM focus/side selector | CONFIRMED-RUNTIME
+
+Observed FF03BC values in SELECT TEAM:
+
+  0 = P1 tab row
+  1 = P1 team row
+  2 = P2 team row
+  3 = Player Position Select (the B-button flow)
+
+The focus field is read as a word by the project probes. LEFT/RIGHT changes the
+P1 tab only when focus is on value 0. During solo play the second panel belongs
+to the CPU. The two tab words are reused by the game during the match and can
+contain unrelated values; do not read them mid-match as league IDs. The Client
+latches the P2 panel tab while SELECT TEAM is active, rather than treating the
+in-match contents of 0x03B2 as a stable opponent field.
+
+Additional A4-relative selection fields found by disassembly:
+
+A4 displacement | MAME address | BizHawk offset | Role / status
+----------------|--------------|---------------|--------------
++$0392          | 0xFF03A4     | 0x03A4        | Field touched by selection code; role not resolved
++$0398          | 0xFF03AA     | 0x03AA        | Field touched by selection code; role not resolved
++$039A          | 0xFF03AC     | 0x03AC        | Field touched by selection code; role not resolved
++$03A6          | 0xFF03B8     | 0x03B8        | Field touched by selection code; role not resolved
+
+A4 was 0xFF0012 in the mapped SELECT TEAM path. These addresses are listed as
+partially mapped fields, not as confirmed public game variables.
+
+5.3 Game Settings values
+
+BizHawk offset | MAME address | Width | Value mapping | Status
+---------------|--------------|-------|---------------|-------
+0xE2E4         | 0xFFE2E4     | 1 B   | Language, row 0; English = 0 | CONFIRMED-RUNTIME
+0xE2E9         | 0xFFE2E9     | 1 B   | Weather, row 5; 0 Dry, 1 Damp, 2 Drenched, 3 Hot | CONFIRMED-RUNTIME
+0xE2EC         | 0xFFE2EC     | 1 B   | Half Length, row 7; 0 = 2 minutes, 1 = 4 minutes | STRONG
+0xE2F0         | 0xFFE2F0     | 1 B   | Skill Level, row 11; 0 Semi-Pro, 1 Pro | CONFIRMED-RUNTIME
+
+The settings row cursor at 0x038C was observed at 0 for Language, 5 for Weather,
+and 11 for Skill Level. MAME menu descriptors and the option captures identify
+Half Length as row 7. The game-settings RAM block around 0xE2E0 is only partially
+mapped; do not assign meaning to other bytes from proximity alone.
+
+Weather cycle observed in the menu: 1 -> 2 -> 3 -> 0 -> 1 when moving right.
+The AP patch writes the seed Weather into the fresh/invalid-BRAM initializer at
+ROM 0x814D2 and sets the initial Weather-unlock mask accordingly. Valid existing
+SRAM can bypass the initializer; preservation of a user's saved choice is not
+implied by the ROM patch.
+
+5.4 Special-menu setting words
+
+BizHawk offset | MAME address | Width | Meaning / observed values | Status
+---------------|--------------|-------|---------------------------|-------
+0xE320         | 0xFFE320     | 2 B   | Special settings word 0 | CONFIRMED-RUNTIME
+0xE322         | 0xFFE322     | 2 B   | Adjacent Special settings word 1; AP reads/preserves it, bit meanings open | CANDIDATE
+
+Word 0 is big-endian. The AP-mapped rows and value masks are:
+
+  Row 0, Invisible Walls: 0x0001
+  Row 1, Curve Ball:      0x0002
+  Row 2, Crazy Ball:      0x0004
+  Row 8, Balloon Ball:    0x0100
+
+Examples observed in the Special menu include word 0 = 0x0004 for Crazy Ball
+alone and 0x0100 for Balloon Ball alone. All four mapped options on is
+0x0107. These are value bits in the game RAM word; the corresponding AP unlock
+mask is a separate byte in the patched ROM, described in section 8.
+
+Rows 3, 4, 5, 6, 7, and 9 are held Off by the AP patch using mask 0x02F8.
+The aggregate labels in source describe these as Dream Team, Super*, and Stupid
+Goalie; an individual row-to-label table is not asserted here. Special values
+are captured while the Special task is active. The user traces show them
+cleared after leaving that task; the exact native writer has not been localized.
+
+5.5 Match scores, clock, and team pointers
+
+BizHawk offset | MAME address | Width | Mapped value / role | Status
+---------------|--------------|-------|--------------------|-------
+0xF8B5         | 0xFFF8B5     | 1 B   | Team 1 score byte | CONFIRMED-RUNTIME
+0xF8B6         | 0xFFF8B6     | 1 B   | Team 2 score byte | CONFIRMED-RUNTIME
+0xF8A5         | 0xFFF8A5     | 1 B   | Match clock counter; seconds observed | STRONG
+0xF8A7         | 0xFFF8A7     | 1 B   | Related clock byte; diverges from 0xF8A5 | CANDIDATE
+0xF89F         | 0xFFF89F     | 1 B   | Nearby counter/phase; meaning unresolved | CANDIDATE
+0xE51C         | 0xFFE51C     | 4 B? | Pointer candidate for P1/Home team record | CANDIDATE
+0xE520         | 0xFFE520     | 4 B? | Pointer candidate for opponent record | CANDIDATE
+0xE788         | 0xFFE788     | 4 B? | Additional opponent-record pointer candidate | CANDIDATE
+
+The score bytes were initialized by the game to 0-0 at kickoff; external test
+writes remained in the score fields during play; natural goals incremented the
+corresponding team byte. The Action Replay labels are "Team 1" and "Team 2".
+The project's older HOME/AWAY names are aliases only: they do not guarantee
+which team is controlled by a human. Score checks based on positive increments
+can observe either team's goals.
+
+The team-pointer candidates above were reported as pointing into the ROM team
+name table and persisting during some match captures. Their exact pointer
+selection, width, and opponent-ID derivation have not been cross-validated
+across all modes/builds. They are not a confirmed substitute for team ID 0x03B4
+or the P2 tab captured at SELECT TEAM.
+
+5.6 A5-relative feature/session fields
+
+With A5 = 0x00000772, the following 16-bit displacements resolve to the listed
+MAME addresses. These are source/disassembly-derived references, not a promise
+that the field has the same meaning in every task or build.
+
+A5 displacement | Derived MAME address | BizHawk offset | Project description / status
+----------------|----------------------|---------------|------------------------------
+$DBBF(A5)       | 0xFFE331             | 0xE331        | Feature-bit field; exact width/value map incomplete
+$D96C(A5)       | 0xFFE0DE             | 0xE0DE        | AP session flag; exact values not mapped
+$DA70(A5)       | 0xFFE1E2             | 0xE1E2        | Legacy custom/options feature flags; not the league tab mask
+$DA62(A5)       | 0xFFE1D4             | 0xE1D4        | Legacy options flag; semantics incomplete
+$DA64(A5)       | 0xFFE1D6             | 0xE1D6        | Legacy options flag; semantics incomplete
+$DA66(A5)       | 0xFFE1D8             | 0xE1D8        | Legacy team/filter path; not the Friendly tab lock
+$D9D6(A5)       | 0xFFE148             | 0xE148        | A5-relative menu field; exact role incomplete
+$D9D9(A5)       | 0xFFE14B             | 0xE14B        | Legacy settings field; exact role incomplete
+$DA38(A5)       | 0xFFE1AA             | 0xE1AA        | Close-window flag in historical task notes
+$DDB2(A5)       | 0xFFE524             | 0xE524        | Arithmetic candidate only; described as a signed team-base offset
+
+The final row is especially weak: the project notes explicitly leave the
+team-base interpretation unresolved. Do not use it as a team pointer without
+re-proving the access and target in the relevant task.
+
+6. SCREEN AND TASK SIGNATURES
+-----------------------------
+6.1 Screen-byte pairs
+
+MAME E7 | MAME F5 | Screen/context | Notes
+--------|---------|----------------|------
+0x94    | 0x77    | Title hub / park with Archipelago and Options in AP base | Observed stable signature
+0x77    | 0x87    | Post-match Select Mode | Observed stable return-menu signature
+0x56    | 0x0D    | SELECT TEAM | E8 must also be 0x00 for the mask hooks
+0x22    | 0x1D    | Controllers | Observed signature
+0xBC    | 0xE0    | PRE GAME | Observed signature
+--      | 0x72    | Title/intro phase | F5 alone was observed; not a complete pair
+
+For SELECT TEAM, the documented AP mask-hook guard is E7=0x56, E8=0x00,
+F5=0x0D. A much older prototype used F5=0xF0; that is not the current guard.
+Screen-byte pairs can be reused during transitions and must not be treated as a
+unique match result without the task/context checks below.
+
+6.2 Task slot layout
+
+The mapped task-0 slot begins at MAME 0xFFFECE, which is BizHawk 68K RAM offset
+0xFECE. The project reads 14 bytes:
+
+Offset from slot | Width | Field | Byte order
+-----------------|-------|-------|-----------
++0x00            | 4 B   | Update function pointer | Big-endian
++0x04            | 4 B   | Render function pointer | Big-endian
++0x08            | 4 B   | Data pointer | Big-endian
++0x0C            | 1 B   | Task type | N/A
++0x0D            | 1 B   | Task state | N/A
+
+Pointers may be represented as 32-bit sign-extended values, e.g. 0xFFFF0012.
+This is a task structure, not an array of independent game flags.
+
+6.3 Native Game Over task signature
+
+The following task-0 tuple was observed at the native result/menu transition:
+
+  Update: 0x00095E72
+  Render: 0x000957EE
+  Data:   0xFFFF35EA
+  Type:   0x09
+  State:  0x01
+
+The AP watcher requires two consecutive polls of this tuple in its current
+implementation. E7/F5 were not constant across all captures: values such as
+0x44/0x41 and 0x00/0x00 occurred in the same flow. Therefore the screen-byte
+pair alone is not the Game Over signature. The separate `data` values observed
+for Pause and PRE GAME include 0xFFFF500E and 0xFFFF0012 respectively; neither
+pointer is a unique match-end flag.
+
+6.4 Champions and Special task observations
+
+Champions/title task-0 cold-hub tuple:
+
+  Slot:   MAME 0xFFFECE (BizHawk 0xFECE)
+  Update: 0x00092410
+  Render: 0x00091BCE
+  Data:   0xFFFF1A36
+  Type:   0x00
+  State:  0x02
+  Selector word: MAME 0xFF1A38 / BizHawk 0x1A38, initially 0x0000
+  Guard word:    MAME 0xFF1A3C / BizHawk 0x1A3C, initially 0x0000
+  Root long:     MAME 0xFFE11A / BizHawk 0xE11A, observed 0x00000000
+
+A separate AP post-match route uses task-0 Data=0xFFFF0012. A user-run E2E
+test on 2026-10-13 confirmed the post-match Select Mode route: after the
+completion threshold, the Client armed the request on the menu, the debugger
+observed the task-0 state-0x40 route at E7/F5=0x77/0xBC, task type 0x22 appeared,
+the Client acknowledged and cleared the request, and the user confirmed the
+Champions screen visually. The exact APWorld/seed version was not printed in
+those logs. The debugger did not establish the effective PC/D0 at the native
+dispatcher; the E2E route is confirmed, but its exact CPU-level argument/path
+remains unmapped. Do not treat the phase list as a universal screen API.
+
+The created Champions task-22 functions observed in the project are:
+
+  Update: 0x000A04B4
+  Render: 0x0009FE8E
+  Type:   0x22
+
+The task-22 data pointer and a complete vanilla task-22 signature are not
+specified here.
+
+Special-menu task signature observed in user traces:
+
+  Update: 0x000AA6A8
+  Render: 0x000A9F84
+  Data:   0xFFFF0012
+  Type:   0x1D
+  Active state: 0x01
+  Closing state: 0x40
+
+Use the full tuple; the data pointer 0xFFFF0012 is shared with other flows.
+
+7. SELECT TEAM TABS AND LEAGUE_MASK
+-----------------------------------
+7.1 Tab-index map
+
+For the AP SELECT TEAM mask path, bit i corresponds to tab index i. The latest
+corrected label map is:
+
+Bit / tab | Label
+----------|------
+0x00 / 0 | American
+0x01 / 1 | Brazilian
+0x02 / 2 | English
+0x03 / 3 | French
+0x04 / 4 | German
+0x05 / 5 | Italian
+0x06 / 6 | Malaysian
+0x07 / 7 | Dutch
+0x08 / 8 | Scottish
+0x09 / 9 | Spanish
+0x0A / 10 | Swedish
+0x0B / 11 | AFC
+0x0C / 12 | Unused/dead tab; blank label in the observed AP data
+0x0D / 13 | CAF
+0x0E / 14 | CONCACAF
+0x0F / 15 | CONMEBOL
+0x10 / 16 | OFC
+0x11 / 17 | UEFA
+
+Playable bits in the current source: 0-11 and 13-17. Bit 12 is excluded.
+The resulting playable mask is 0x0003EFFF. A tested multi-bit example is
+0x00030002 = Brazilian + OFC + UEFA.
+
+7.2 ROM mask cores and immediate locations
+
+In the AP base ROM, each core is a six-byte `move.l #mask,D1` instruction:
+
+Instruction ROM offset | Immediate ROM offset | Opcode and value layout | Core
+-----------------------|----------------------|-------------------------|-----
+0x00007F00            | 0x00007F02           | 22 3C + 4-byte BE mask | A
+0x00007F8A            | 0x00007F8C           | 22 3C + 4-byte BE mask | B
+0x001FC82A            | 0x001FC82C           | 22 3C + 4-byte BE mask | C
+0x001FD570            | 0x001FD572           | 22 3C + 4-byte BE mask | D
+
+The four instruction sites and the four immediate fields are different
+addresses. Several early notes call the instruction start the "immediate site";
+for an actual longword read/write use instruction_offset + 2. All four cores
+must contain the same big-endian mask.
+
+The raw vanilla ROM has 0xFF padding at these locations; the 22 3C cores are
+installed by the AP base patch. They are not vanilla code at those offsets.
+
+Core/path notes from disassembly:
+
+  ROM 0x07EC8: gate A code area
+  ROM 0x07F4C: gate B code area
+  ROM 0x1FC7FC: gate C / backward-floor helper
+  ROM 0x1FD538: gate D / backward clamp code
+  ROM 0x093260: native tab increment
+  ROM 0x093270: right-path clamp hook
+  ROM 0x0932E4: second clamp/check path
+  ROM 0x092FDA / 0x092FDE: left/backward path and store hook
+  ROM 0x093006: secondary test/clamp hook
+  ROM 0x093020 / 0x093024: left/backward path and store hook
+
+The hooks clamp the game's selected tab to set bits and wrap across 0..17.
+MAME op207/op222 and BizHawk unlock benches confirmed that the group list is
+filtered for both P1 and P2 panels. The BizHawk 2.10 / Genesis Plus GX bench
+also confirmed that writing the four MD CART immediate longwords at +2 takes
+effect while the game is running in SELECT TEAM.
+
+7.3 Default tab immediates
+
+  P1 default tab immediate: ROM 0x092E60, 16-bit BE
+  P2 default tab immediate: ROM 0x092E66, 16-bit BE
+  Opcode prefix:            ROM 0x092E5E / 0x092E64, bytes 39 7C
+  Vanilla observed values:  0x000B at both immediates
+  AP seed values:           default tab is set to that seed's starting bit
+
+These are ROM constants, not RAM values. If the starting bit is not zero, the
+AP generator changes both defaults so entry does not begin on an unavailable
+tab.
+
+7.4 Build values and terminology
+
+- A v38c changelog records a broad-open mask of 0x0003EFFF.
+- A later v38e note records 0x0000EFFF as a historical base value. These are
+  different AP build snapshots, not two vanilla-game constants.
+- The current seed procedure writes a one-bit starting mask to all four cores;
+  received league items add bits to that mask.
+- In older notes, the four addresses are sometimes called the addresses of the
+  immediates. The actual mask data begins two bytes after each 22 3C opcode.
+- A team-table conf_id and a visible SELECT TEAM tab index are separate concepts
+  until a given build proves their relation.
+
+8. GAME SETTINGS AND SPECIAL AP LOCKS
+--------------------------------------
+This section separates actual game RAM values from AP-only bytes in the ROM.
+
+8.1 AP ROM data bytes for setting unlocks
+
+All addresses below are MD CART offsets in a seed-patched ROM, not RAM.
+The patcher reserves free 0xFF padding in the AP base and writes these bytes:
+
+ROM offset | Width | AP value/use | Status
+-----------|-------|--------------|-------
+0x1FE100  | 1 B   | Weather unlock mask; seed starts at `1 << weather_value` | AP-ONLY
+0x1FE101  | 1 B   | Skill unlock mask; starts with Semi-Pro bit 0 set (0x01) | AP-ONLY
+0x1FE102  | 1 B   | Initialization flag; generator initializes to 0 | AP-ONLY
+0x1FE103  | 1 B   | Special unlock mask; starts at 0, grows by item receipt | AP-ONLY
+
+Weather mask bit values: 0x01 Dry, 0x02 Damp, 0x04 Drenched, 0x08 Hot.
+Skill mask: bit 0 Semi-Pro, bit 1 Pro. Special mask bits are listed below.
+These four bytes are not the setting values stored in 68K RAM.
+
+8.2 Settings ROM hooks and code caves
+
+MD CART offset | Role in current local AP source | Status
+---------------|---------------------------------|-------
+0x1FDCA6       | Settings lock code base; must end before 0x1FE100 | AP-ONLY
+0x094CA4       | Settings initialization hook | AP-ONLY
+0x094FD8       | Settings gray/row hook after all 12 row records exist | AP-ONLY
+0x087C58       | Settings LEFT input gate | AP-ONLY
+0x087CF6       | Settings RIGHT input gate | AP-ONLY
+0x000814D2     | Fresh/invalid-BRAM Weather default instruction | BUILD-SPECIFIC
+0x000814DC     | Fresh/invalid-BRAM Half Length default instruction | BUILD-SPECIFIC
+
+Vanilla bytes at 0x814D2 are `1B 7C 00 01 DB 77`, which store Weather value 1
+(Damp) through A5-relative address -0x2489(A5). The AP patch changes the
+immediate word to the seed value 0, 1, 2, or 3; the RAM target with A5=0x772 is
+0xFFE2E9. This initializer is bypassed when valid SRAM passes its boot check.
+
+Vanilla bytes at 0x814DC are `1B 7C 00 01 DB 7A`, which store Half Length 1
+(four minutes) through -0x2486(A5), resolving to 0xFFE2EC for A5=0x772. The
+AP patch changes the immediate to 0 (two minutes) on the fresh/invalid-BRAM
+initializer path. It is not a recurring live RAM write.
+
+8.3 Special menu values and hooks
+
+The game values are the RAM words 0xFFE320 and 0xFFE322 (section 5.4). The AP
+patch adds a separate byte mask at MD CART 0x1FE103. Row to mask mapping:
+
+Special row | Game RAM word-0 value mask | AP ROM mask bit | Label
+------------|----------------------------|----------------|------
+0           | 0x0001                     | bit 0 (0x01)   | Invisible Walls
+1           | 0x0002                     | bit 1 (0x02)   | Curve Ball
+2           | 0x0004                     | bit 2 (0x04)   | Crazy Ball
+8           | 0x0100                     | bit 3 (0x08)   | Balloon Ball
+
+The AP code forces rows 3, 4, 5, 6, 7, and 9 Off with value mask 0x02F8.
+This is AP behavior, not a claim about all vanilla menu states.
+
+MD CART offset | Role | Status
+---------------|------|-------
+0x1FE200       | Special lock code base | AP-ONLY
+0x0AA6CE       | Special task initialization hook | AP-ONLY
+0x0AA71A       | Delayed visual/gray hook | AP-ONLY
+0x0AA796       | Special input gate | AP-ONLY
+0x0AA934       | Special exit/palette-restoration hook | AP-ONLY
+
+The Special task's original menu initialization also uses task-data offset
+0x004C as a visual-completion field. The AP source waits through an initial
+four-frame render delay before its visual pass. These are task/code details,
+not additional game-setting RAM addresses.
+
+Special-menu visual constants in the AP patch (not CPU addresses):
+
+  Plane A map: x=13..32, y=6..25, 20 cells per line
+  Rows: 10; two tile rows per item; label cells x=13..27
+  Word map size: 0x0320 bytes; plain plus gray maps: 0x0640 bytes
+  Gray CRAM color: 0x0888; prior CRAM values cited: 0x0006 and 0x008C
+  Input debounce constant: 0x000C frames
+
+9. MATCH SCORES, CLOCK, AND END-OF-MATCH LIMITS
+-----------------------------------------------
+9.1 Confirmed score bytes
+
+  BizHawk 68K RAM 0xF8B5 = MAME 0xFFF8B5 = Team 1 score, 1 byte
+  BizHawk 68K RAM 0xF8B6 = MAME 0xFFF8B6 = Team 2 score, 1 byte
+
+Existing BizHawk 2.10 / Genesis Plus GX evidence includes a game-initialized
+0-0 kickoff, natural score changes by the game, and retained external test
+writes during a match. Real multi-match traces confirmed that the two bytes
+track the two team scores. The original Action Replay labels are Team 1 and
+Team 2. Do not equate Team 1 with the human player without checking controller
+assignment.
+
+9.2 Clock neighborhood
+
+- 0xFFF8A5 / BizHawk 0xF8A5: byte counter tracked displayed seconds in captures
+  (for example 51 at 0:51 and 162 at 2:42). Strong match-clock mapping.
+- 0xFFF8A7 / BizHawk 0xF8A7: nearby byte follows the clock but diverges in
+  captures; it is not an exact duplicate of 0xF8A5.
+- 0xFFF89F / BizHawk 0xF89F: nearby small counter/phase field, not fully decoded.
+
+The earlier hypothesis that these three bytes described the opponent was
+invalidated by clock-correlated traces. Do not use them as opponent IDs.
+
+9.3 Full-time and victory detection
+
+No standalone stable MATCH_ACTIVE or FULL_TIME RAM byte has been identified.
+The task-0 Game Over tuple in section 6.3 is the strongest mapped terminal-menu
+signature in the current notes. Screen bytes by themselves are insufficient.
+
+The AP client historically latched the P2 tab at SELECT TEAM and used a later
+score result to send a Beat-a-Team check. A user report dated 2026-10-13
+identified a false-positive victory check after leaving a match after scoring;
+the victory gate is therefore under review. This does not invalidate the score
+byte mapping, but it means a score reset or menu transition alone must not be
+advertised as a proven win detector.
+
+10. CHAMPIONS / AP EXTENSION MAP
+-------------------------------
+Every ROM address in this section is an MD CART offset and exists only in the
+AP-patched ROM. Vanilla has 0xFF padding in the reserved tail bytes listed
+below. The CPU-side hook code does not make these fields native FIFA 96 RAM.
+
+10.1 AP status/marker bytes
+
+ROM offset | Width | AP value / role | Status
+-----------|-------|-----------------|-------
+0x1FE104  | 1 B   | Champions request; 0 idle, Client sets 1 to arm | AP-ONLY
+0x1FE105  | 4 B   | Hook marker ASCII "F96D" | AP-ONLY
+0x1FE109  | 1 B   | Done latch; 0 initially, 1 after observing task 0x22 | AP-ONLY
+0x1FE10A  | 1 B   | Home team ID; 0xFF unset, valid IDs 0..239 | AP-ONLY
+0x1FE10B  | 4 B   | Team-display marker ASCII "F96T" | AP-ONLY
+
+The client validates the marker bytes before using the Champions path. These
+locations are writable bytes in the MD CART domain under the documented
+BizHawk setup. They are not fields in the unmodified retail ROM.
+
+10.2 Champions code hooks and caves
+
+MD CART offset | Original bytes or role | AP-patched purpose
+---------------|-----------------------|------------------
+0x091BCE       | 4E 56 00 00 48 E7 10 18 | task-0 render-entry hook
+0x09268E       | 4A 6C 00 06 67 06 39 7C 00 0B 00 02 | mode/state guard hook
+0x0926A2       | 30 2C 00 02 48 C0 | mode-argument hook
+0x1FED20       | reserved 0xFF tail in base | Champions trigger code cave
+0x088D20       | 7A 00 1A 2C 00 10 | team-palette display hook
+0x088D8C       | 2F 0C 4E AD 03 5A | team-name display hook
+0x1FF040       | reserved 0xFF tail in base | palette redirect code cave
+0x1FF000       | reserved 0xFF tail in base | name redirect code cave
+
+The AP task hook is request-gated. It checks the ROM marker, task structure,
+menu context, selector/guard/root, request and done bytes before taking the
+native transition path. It is not equivalent to directly writing a task state.
+A prior direct state-0x40 diagnostic write failed with an allocation error; the
+native teardown and render-entry ordering must be preserved.
+
+10.3 Cold title-hub handoff RAM observations
+
+At the cold title hub, the task-0 data pointer is 0xFFFF1A36. Related fields:
+
+BizHawk offset | MAME address | Width | Observed value / role
+---------------|--------------|-------|----------------------
+0x1A38         | 0xFF1A38     | 2 B   | Selector word; initially 0, request path uses 0x000A
+0x1A3C         | 0xFF1A3C     | 2 B   | Guard word; expected 0 in the mapped hub context
+0xE11A         | 0xFFE11A     | 4 B   | Root pointer; observed 0 in the accepted cold-hub case
+0xE116         | 0xFFE116     | 2 B   | Diagnostic/native-call argument observed as 0x3055
+0xE118         | 0xFFE118     | 1 B   | Diagnostic/native-call argument observed as 0x0B
+0xE148         | 0xFFE148     | 1 B   | Diagnostic/native-call argument observed as 0x03
+
+The selector, E116, E118, and E148 values are from the cold-hub native-call
+work. The renderer hook applies its argument/state changes at the correct
+render entry after the FEVIDEO teardown. Do not treat these values as generic
+settings or write the task state early from an AP client.
+
+The cold-hub path was observed to create task type 0x22 and display the native
+Champions screen. Two distinct user-run E2E paths were later confirmed on
+2026-10-13: a no-match title-hub completion used the France fallback (ID 80,
+palette 02/0B/03), while a separate post-match Select Mode completion used the
+played Home team Zambia (ID 234, palette 00/06/03). Both produced task type
+0x22 and a confirmed Champions display. The post-match log did not identify the
+exact APWorld/seed version, and the effective native PC/D0 argument remains
+unmapped. Success on one route must not be used as proof for the other; each
+route has its own E2E evidence.
+
+10.4 Team name and palette redirection
+
+The AP ROM hook redirects the Champions renderer from the fixed Germany record
+(ID 85, ROM 0x132178) to the latched Home team ID. Name and palette are redirected
+together using separate hooks at 0x088D8C and 0x088D20. If no played Home team
+has been latched, the source defines France (ID 80) as the fallback. In the
+AP ROM, the dynamic team ID is stored at MD CART 0x1FE10A; in vanilla, the
+normal records remain at 0x1314DA + ID*0x26.
+
+A diagnostic MAME display substitution at code sites 0x0AD0CE and 0x0AD30E
+was used in a cold-call investigation to redirect the displayed name only.
+That diagnostic was not a change to the internal team ID and is not the AP
+production hook. A displayed name without matching palette is not proof of a
+coherent team identity.
+
+11. ROM CODE LOCATIONS AND HISTORICAL PATCH REFERENCES
+-----------------------------------------------------
+The following are ROM file offsets or code constants, not RAM variables.
+They are included because they are frequently mistaken for memory fields.
+
+11.1 Task/window and Cheats references
+
+ROM offset | Mapped code/data role | Status / note
+-----------|-----------------------|--------------
+0x000041BE | FETASK_end/free task path | Static code map
+0x0000420C | FETASK_add/spawn task path | Static code map
+0x00004290 | FETASK_run area | Approximate location
+0x0006E988 | close-window routine | Static code map
+0x0007B648 | FETASK_nexttask dispatcher | Static code map
+0x0007B66C | PC-relative jump-table base | Static code map
+0x0007B66E | nexttask case table, 16-bit entries | Static code map
+0x0007BCA4 | nexttask case 0x14 OPTIONS handler | Static code map
+0x0007BCDE | OPTIONS selector-2 route | Static code map
+0x0007BCE5 | MOVEQ task-ID immediate in the route | Build-specific byte
+0x0007BDCA | historical close flag write site | Static code map
+0x00001114 | spawn thunk: jump to 0x420C | Static code map
+0x0000111A | end thunk: jump to 0x41BE | Static code map
+0x000AA697 | FERTASK_cheats text reference | Static code map
+0x000AA6A8 | FETASK_cheats launcher / Special task update | Static code map
+0x000AA96B | FETASK_cheats text reference | Static code map
+0x00004170 | CREAT routine | Static code map
+0x000001B6 | historical Cheats window definition | Static code map
+
+The task ID is a task type value, not a RAM address. The project uses task
+0x1D for the Cheats/Special path; the older CustomName task is 0x1A.
+FETASK_spawn ID 0x14 is the OPTIONS task. Do not confuse task ID 0x14 with the
+nexttask case number or with a RAM location.
+
+11.2 Current AP Special route and B-shortcut guard
+
+The Options -> Special route at ROM 0x07BCE4 is expected to retain bytes
+`7E 1D 60 00 00 D2`. The immediate task ID is at 0x07BCE5 and remains 0x1D.
+The current source redirects six non-Options B-shortcut leaves from task 0x1D
+to existing fallback task 0x09 by changing only the MOVEQ immediate:
+
+ROM offset | Before bytes                  | AP-guarded bytes
+-----------|-------------------------------|-----------------
+0x07BA0C  | 7E 1D 60 00 03 AA             | 7E 09 60 00 03 AA
+0x07BAC0  | 7E 1D 60 00 02 F6             | 7E 09 60 00 02 F6
+0x07BB60  | 7E 1D 60 00 02 56             | 7E 09 60 00 02 56
+0x07BBAC  | 7E 1D 60 00 02 0A             | 7E 09 60 00 02 0A
+0x07BC18  | 7E 1D 60 00 01 9E             | 7E 09 60 00 01 9E
+0x07BC6E  | 7E 1D 60 00 01 48             | 7E 09 60 00 01 48
+
+The PRE GAME route at 0x07BAC0 is explicitly identified in the MAME notes.
+The other five entries are mapped as non-Options B leaves, but not all have
+separate screen-by-screen visual validation. The route at 0x07BCE4 is excluded
+from the guard and must remain unchanged.
+
+11.3 Historical menu/patch addresses
+
+These addresses describe earlier AP base work. They are not additional RAM
+locations, and some changes were superseded by later source:
+
+- ROM 0x0BE0 and 0x0BE6 are jump slots to shared video-clear helpers. In a
+  traced teardown, 0x0BE6 led to 0x851F2; this is not the Special action.
+- ROM 0x095372 `70 01` was an earlier attempt to enable Special; later notes
+  reject it as the wrong function and state that the v38e base did not use it.
+- ROM 0x0AA946 -> cave 0x1FDC00 was the historical v38d Start-to-OPTIONS hook.
+  It is not a stable vanilla memory location.
+- ROM 0x0A9FE7, 0x0AA2FB, and 0x0AA7F3 were historical Cheats UI mask edits
+  using 0x03FF. Do not confuse that ten-bit menu mask with LEAGUE_MASK.
+- ROM 0x0A6F12 was an earlier branch edit in the Cheats unlock path.
+- ROM 0x0A3275 / 0x0A3282 and 0x0A3377 / 0x0A3384 are historical AP_players
+  and AP_try_swap string/code references. The associated 0x264 stride is not
+  the 0x26-byte vanilla team-record stride.
+- ROM 0x0A6F57 and approximately 0x0A7000 are task-manager/call-site notes.
+- ROM 0x0AADA0 -> 0x0ADBC0 -> 0x0AC292 -> vsprintf, with text at 0x0AD9F0,
+  is a historical allocation-error chain. It is diagnostic code, not a normal
+  gameplay RAM map.
+
+11.4 Additional v38c-family code sites
+
+The addresses below are recorded in the 2026-09-30 vanilla-to-v38c changelog.
+They document an AP base family and may not match another patch revision.
+They are ROM instruction/data offsets, not RAM variables.
+
+ROM offset or range | Mapped role in the historical patch notes
+--------------------|--------------------------------------------
+0x000767            | Vanilla JSR-to-initializer site; changed to NOPs in v38c
+0x1FC8CC            | Target of the disabled vanilla initializer call
+0x1FD000            | Helper constant table; historical note says 0x0C x 16, exact extent not fixed here
+0x1FD020-0x1FD047   | Optional init/title stub; title-only gate in earlier patch notes
+0x1FD100-0x1FD135   | Cursor helper
+0x1FD180-0x1FD1AD   | Second cursor helper
+0x1FD1C0-0x1FD22D   | Absolute patch table; historical writes to RAM handlers near FF476x
+0x1FD240-0x1FD24F   | Additional helper area
+0x1FD260-0x1FD2AD   | Compare/rebind helper; returns to ROM 0x879D2
+0x1FD300-0x1FD387   | AP title-task entry
+0x1FD3A0-0x1FD3F9   | Title cursor DOWN, wrap, and skip helper
+0x1FD410-0x1FD45B   | Title cursor UP, wrap, and skip helper
+0x1FD4B0 / 0x1FD4D0 | Small helper entries
+0x1FD500-0x1FD5B3   | Trampolines between mask gates and game-setup code
+0x00083CAE          | Historical jump hook to 0x1FD020
+0x0008799C          | Historical jump hook to 0x1FD1C0
+0x000879CB          | Historical jump hook to 0x1FD260
+0x00092420          | AP title-task state-machine entry hook
+0x000924C5          | Historical title flag immediate
+0x000924E1          | Historical title selectable-item count immediate
+0x000924E7          | Historical title selectable-item count immediate
+0x00092582          | Title cursor DOWN hook
+0x000925C8          | Title cursor UP hook
+0x0009AE07           | Confederation maximum compare; historical change 0x0B -> 0x11
+0x0009AE13           | Confederation maximum immediate; historical change 0x0B -> 0x11
+0x0009AE26           | Historical filter path neutralized
+0x00092FC7           | Historical list-count/limit immediate set to 0x13
+0x00092E61           | Historical Custom-slot enable flags cleared
+0x00092E67           | Historical Custom-slot enable flags cleared
+0x00092EAD           | Historical Custom flag cleared
+0x00092EC5           | Historical Custom flag cleared
+0x00095130           | Historical OR of A5-relative DA70 flag removed
+0x00095F44           | Historical DA70 gate ignored
+0x000A0532           | Historical OR of A5-relative DA62 flag removed
+0x000A053A           | Historical OR of A5-relative DA64 flag removed
+0x000A0552           | Historical options flag operation removed
+0x000A231C           | Historical OR of A5-relative DA70 flag removed
+0x00081552           | Historical Options post-input hook to cursor helper
+0x00002566           | Historical Cheats unlock constant path
+0x000A9FE7           | Historical Cheats UI mask immediate set to 0x03FF
+0x000AA2FB           | Historical Cheats UI mask immediate set to 0x03FF
+0x000AA7F3           | Historical Cheats UI mask immediate set to 0x03FF
+0x000A6F12           | Historical Cheats unlock branch changed
+0x0000098B           | Historical task-table entry redirected to Cheats launcher
+0x000009DF           | Historical task-table entry redirected to Cheats launcher
+0x00000A40           | Historical task-table entry redirected to Cheats launcher
+0x001FC71A           | Historical Cheats task-table variant
+0x001FC758           | Historical Cheats task-table variant
+0x000AA946            | v38d Start exit hook to the Options cave 0x1FDC00
+0x001FDC00            | v38d Start-to-OPTIONS cave; not a stable vanilla field
+
+The confederation-limit sites above are not the four Friendly tab mask cores.
+Likewise the historical A5-relative DA70/DA62/DA64 option flags are not a
+league-mask storage address. Use a matching ROM hash and the full changelog
+before editing any of these offsets.
+
+A broader v38c change set exists, but it belongs to that historical AP base.
+The offsets above are included only as build-specific context and must be
+checked against the target image before use.
+
+12. CANDIDATES, INVALIDATED LEADS, AND BUILD DIVERGENCES
+--------------------------------------------------------
+12.1 Invalidated or unsafe interpretations
+
+1. RAM 0xFF0A00 (BizHawk 68K RAM offset 0x0A00) is NOT a free league-mask
+   variable. A RAM-mask prototype observed game data 0x02F802F1 there at park;
+   the game overwrote the injected mask and produced invalid tab behavior.
+   The supported project path is the four MD CART immediate longwords.
+
+2. The old opponent hypothesis for 0xFFF89F / 0xFFF8A5 / 0xFFF8A7 is invalid.
+   0xF8A5 follows displayed seconds; 0xF8A7 is related but diverges; 0xF89F
+   remains unresolved.
+
+3. The old tab map that assigned CAF to bit 12, CONCACAF to bit 13, and
+   CONMEBOL to bit 14 is superseded. The corrected map is bit 12 unused,
+   bit 13 CAF, bit 14 CONCACAF, and bit 15 CONMEBOL. The early op221 visual
+   report itself says CONMEBOL had not yet been observed; use the later
+   corrected source/evidence, not that early table in isolation.
+
+4. ROM mask-core addresses 0x7F00, 0x7F8A, 0x1FC82A, and 0x1FD570 are not
+   vanilla code in the preserved retail ROM; those offsets contain 0xFF fill.
+   They become `move.l #mask,D1` only after the AP base patch.
+
+5. E7/F5 screen bytes alone are not a universal Game Over or win flag. The
+   task tuple and match context are required for a reliable terminal state.
+
+6. 0x03B0 and 0x03B2 are SELECT TEAM tab fields, not stable in-match league
+   fields; the game reuses them during play.
+
+7. 0xFFE331 is a legacy feature-bit field, not the Friendly/Archipelago
+   SELECT TEAM league mask. The mask is in the four ROM code immediates.
+   Likewise, the legacy $DA66(A5) / ROM 0x09AE path is not the tab clamp.
+
+8. The 0xBE6 teardown helper is not the Special action. The relevant
+   Options -> Special task route is the separate nexttask selector-2 path.
+
+12.2 Open candidates and limits
+
+- The exact opponent team ID during play is not settled. 0xE51C, 0xE520, and
+  0xE788 are pointer candidates; 0x03B2 is a reliable P2-panel tab only while
+  SELECT TEAM is active.
+- The exact role of RAM fields 0x03A4, 0x03AA, 0x03AC, and 0x03B8 is open.
+- The full structure/extent and label crosswalk of ROM 0x14A800 is not
+  consistently documented across the historical conf-table builds.
+- No stable full-time or match-active RAM byte is mapped.
+- The exact native writer that clears 0xFFE320/0xFFE322 after leaving Special
+  has not been located.
+- The AP Champions post-match Select Mode to task-0x22 handoff was confirmed
+  in a user-run E2E test on 2026-10-13. The exact APWorld/seed version and the
+  effective native PC/D0 argument were not established by that run; keep those
+  CPU-level details open rather than describing the E2E handoff as unvalidated.
+- A5-relative fields outside the direct score/settings map have incomplete
+  width/value semantics. Recalculate them only in the corresponding A5 context.
+- Valid SRAM can bypass the fresh/invalid-BRAM Weather and Half Length default
+  initializer. Do not infer how a user's saved setting will survive from the
+  ROM immediate alone.
+
+12.3 Conflicting evidence and precedence
+
+- Early memory-domain notes sometimes mixed full MAME bus addresses with
+  base-zero BizHawk RAM offsets. The convention used throughout this document
+  is BizHawk offset = MAME address & 0xFFFF for the mapped 0xFFxxxx RAM window.
+- Early tab-label notes assigned CAF, CONCACAF, and CONMEBOL to earlier bit
+  numbers. The corrected map in section 7 is the one to use; the first visual
+  probe did not by itself establish the final CONMEBOL mapping.
+- The v38c AP-base snapshot had a reported checksum of 0x9E67. That checksum is
+  not the vanilla checksum and is not universal across later seed images.
+- A ROM offset can contain different bytes in retail vanilla, an AP base, and a
+  per-seed image. Identify and hash the exact target image before patching.
+- Where evidence conflicts, the status labels in this document preserve the
+  uncertainty instead of promoting an early hypothesis to a confirmed fact.
+
+13. STANDALONE USE AND PATCH SAFETY
+-----------------------------------
+This reference is intended to be read on its own. It distinguishes the vanilla
+image, AP-only additions, runtime RAM, and ROM code offsets, and records open
+questions where the available evidence is incomplete.
+
+Before using any address in a patch:
+
+1. Identify and hash the exact ROM image and confirm its region/revision.
+2. Confirm that the target bytes match the expected original bytes; abort if
+   they do not.
+3. Confirm whether the address is a ROM file offset, a full 68K bus address,
+   or a BizHawk 68K RAM-domain offset.
+4. Preserve instruction boundaries, data width, big-endian order, task context,
+   and code-cave bounds.
+5. Recalculate the Genesis checksum after a ROM edit.
+6. Verify the write by readback and verify its in-game effect separately. A
+   successful memory write alone does not prove the intended game behavior.

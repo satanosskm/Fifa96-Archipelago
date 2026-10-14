@@ -1,0 +1,1103 @@
+MEGA DRIVE / GENESIS ARCHIPELAGO ROM HACKING
+PRACTICAL ENGINEERING GUIDE
+FROM A CLEAN ROM TO TRUSTWORTHY MULTIWORLD CHECKS
+
+Revision: 1.0
+Date: 2026-10-15
+Audience: ROM hackers, Archipelago world developers, emulator client authors,
+          and RetroAchievements authors
+
+ABOUT THIS GUIDE
+----------------
+This guide condenses practical lessons from a Mega Drive Archipelago project.
+It combines general engineering advice with clearly marked FIFA 96 case-study
+examples. Game-specific addresses and results are examples, not universal Mega
+Drive facts.
+
+The goal is not merely to make a patch boot. The goal is a reproducible chain:
+
+  exact retail ROM
+      -> deterministic patch build
+      -> correct Archipelago slot and item model
+      -> emulator memory contract
+      -> trustworthy checks and item effects
+      -> evidence that distinguishes static, runtime, and visual results
+
+Use the words MUST, SHOULD, and MAY in their ordinary engineering sense. A
+statement marked CONFIRMED describes the tested image and setup, not every ROM
+revision, emulator, region, or hardware configuration.
+
+CONTENTS
+--------
+1. Principles and evidence levels
+2. Mega Drive facts that affect reverse engineering
+3. End-to-end Archipelago architecture
+4. Planning the game integration
+5. ROM identity and reproducible builds
+6. Reverse engineering and memory mapping
+7. Safe 68000 ROM patching
+8. Archipelago world, items, and locations
+9. Emulator client and runtime state management
+10. Designing checks and achievements
+11. Settings, menus, and visual behavior
+12. Testing in stages
+13. Evidence, beta operations, and preservation
+14. Release and compatibility rules
+15. FIFA 96 case study: concrete lessons
+16. Pre-release checklist
+17. Common failure patterns
+
+
+1. PRINCIPLES AND EVIDENCE LEVELS
+---------------------------------
+1.1 Separate three layers
+
+A Mega Drive Archipelago integration normally contains three distinct layers:
+
+A. The retail game
+   Original code, ROM tables, RAM state, menus, gameplay, and save memory.
+
+B. The ROM patch
+   Static code/data changes, seed-specific constants, code hooks, and reserved
+   bytes created by the patcher. These are not vanilla-game variables.
+
+C. The Archipelago client and server
+   The client observes the game, reports locations, receives items, and may
+   write emulator memory. The server maintains multiworld state.
+
+Never describe a layer-B byte as a native game variable. Never describe a
+client-side inference as a game event unless the observed state proves it.
+
+1.2 Use explicit evidence labels
+
+CONFIRMED-STATIC
+  The bytes, instruction, table, or address expression were inspected in the
+  target ROM or disassembly. Runtime behavior is not implied.
+
+CONFIRMED-RUNTIME
+  The game or emulator was observed reading, writing, or changing the value in
+  a controlled run. Record the ROM hash, emulator/core, and exact context.
+
+CONFIRMED-EFFECT
+  A runtime write or item changed the intended game behavior, not just memory.
+  Examples: the tab list changed, a setting survived kickoff, or a natural goal
+  produced the expected score increment.
+
+CONFIRMED-E2E
+  The game, client, and Archipelago server completed the intended flow together.
+  A mock server or offline unit test is not end-to-end evidence.
+
+VISUAL-CONFIRMED
+  A capture proves what the screen displayed. It does not, by itself, prove the
+  underlying team ID, score owner, item receipt, or internal game state.
+
+CANDIDATE
+  Plausible but not proven. Keep it out of production checks until measured.
+
+INVALIDATED
+  A tested alternative interpretation or implementation failed or was disproved.
+
+AP-ONLY
+  Added by the project patch or client, absent from retail vanilla.
+
+BUILD-SPECIFIC
+  Applies only to a named base, region, or revision. State that scope next to
+  the address and value.
+
+1.3 Do not collapse evidence into a single PASS
+
+Track independent outcomes separately:
+
+- ROM identity and patch bytes
+- code/static analysis
+- memory read and write
+- in-game effect
+- visible effect
+- client/server check receipt
+- item receipt and applied effect
+- reconnect/restart behavior
+- RetroAchievements or Universal Tracker integration
+
+A successful unit test is not proof that the emulator wrote the right domain.
+A successful read-back is not proof that the game used the value. A screenshot
+is not proof of the internal state. A server log is not proof that the display
+or gameplay effect was correct.
+
+
+2. MEGA DRIVE FACTS THAT AFFECT REVERSE ENGINEERING
+---------------------------------------------------
+2.1 CPU and data layout
+
+- The main CPU is a Motorola 68000 with big-endian byte order.
+- Multi-byte ROM operands and RAM words/longwords are stored most-significant
+  byte first.
+- The CPU has a 24-bit address bus. Some software stores RAM pointers as
+  32-bit sign-extended values such as 0xFFFF0012; that is a pointer value, not
+  an address in a ROM file.
+- The console also has a Z80 sound CPU, VDP video memory, CRAM, VSRAM, cartridge
+  SRAM, and other devices. Do not assume a value belongs to 68K RAM merely
+  because it appears in a broad emulator memory viewer.
+- Common Mega Drive maps place work RAM in the 0xFF0000-0xFFFFFF window, but
+  always verify the actual game, emulator, core, and domain.
+
+2.2 Emulator domains are not interchangeable
+
+A memory viewer may expose domains such as MD CART, 68K RAM, Main RAM, M68K
+BUS, System Bus, SRAM, VRAM, CRAM, VSRAM, or Z80 RAM. Names and address bases
+can vary by emulator and core version.
+
+The following convention was confirmed for FIFA 96 using BizHawk 2.10 with the
+Genesis Plus GX core:
+
+- MD CART offsets are ROM image offsets.
+- 68K RAM is a 0x10000-byte base-zero domain.
+- For mapped RAM in MAME's 0xFFxxxx window, BizHawk offset = MAME address &
+  0xFFFF. For example, MAME 0xFF03E7 corresponds to BizHawk 0x03E7.
+
+This is a case-specific verified convention, not permission to assume the same
+mapping in every core. Discover and document each target domain explicitly.
+
+2.3 CPU registers and effective addresses
+
+68000 code frequently accesses structures through A4 or A5. A displacement is
+signed, so an expression such as `-$2489(A5)` is not the number 0x2489 added to
+A5. Resolve it using the register value at the relevant execution point, sign
+extension, and 24-bit address wrapping.
+
+Registers are context-dependent. A4 or A5 may point to a different structure
+in another task or screen. Never promote a register-relative expression to a
+global RAM address without recording the observed register base and context.
+
+2.4 Game state is often task-based
+
+Many 16-bit games use a task or window manager rather than a single global
+screen variable. A useful task signature can include:
+
+- update-function pointer
+- render-function pointer
+- data pointer
+- task type
+- task state
+- screen/phase bytes
+- associated menu data and root pointers
+
+The state byte or screen ID alone may be reused across unrelated flows. Prefer
+a full tuple plus a stable polling requirement, and confirm the tuple in both
+positive and negative cases.
+
+
+3. END-TO-END ARCHIPELAGO ARCHITECTURE
+--------------------------------------
+A robust integration has four connected parts.
+
+3.1 World and seed generation
+
+The Archipelago world defines:
+
+- game identifier and version compatibility
+- settings and valid option ranges
+- regions, locations, items, rules, and goal
+- item pool size and starting items
+- seed and slot data passed to the patcher/client
+
+The generator should reject impossible or inconsistent settings rather than
+silently truncating a pool, inventing a fallback, or placing duplicate items.
+A starting unlock should be precollected and removed from that player's item
+pool unless the game design explicitly says otherwise.
+
+3.2 ROM patch
+
+The patcher transforms a specifically identified retail image into a patched
+ROM. A typical pipeline is:
+
+  clean vanilla image
+      -> common base patch
+      -> seed-specific constants
+      -> checksum update
+      -> output ROM and Archipelago patch container
+
+The patch should be deterministic. Given the same vanilla hash, base patch,
+seed data, and patcher version, it should produce the same bytes.
+
+3.3 Client
+
+The emulator client should:
+
+- connect to the correct memory domain
+- validate the running game and, if possible, the patch markers
+- read the minimum stable set of memory fields
+- detect state transitions
+- report each location once
+- rebuild desired unlock/settings state from received inventory
+- write only when needed and verify read-back
+- recover safely after reconnect, emulator reset, or ROM reload
+
+3.4 Server and patch download
+
+Archipelago uses game and player metadata to associate a patch with the correct
+slot. The patch manifest's game identifier must match the world's declared game
+identifier exactly when the host compares them. A mismatch can prevent patch
+association or download even if the ROM itself is valid.
+
+If a game identifier changes, consider legacy patches explicitly. FIFA 96
+project example: the current game ID is `Fifa Soccer 96 Megadrive`, while older
+patch manifests may contain `Fifa96`. Compatibility must be handled deliberately;
+do not assume an alias is accepted automatically.
+
+
+4. PLANNING THE GAME INTEGRATION
+-------------------------------
+4.1 Choose signals before writing hooks
+
+For every planned location or item, write down:
+
+- the player-visible event
+- the internal game event that represents it
+- candidate RAM or task signals
+- the moment those signals are valid
+- the field width and byte order
+- the reset/reuse behavior
+- the exact positive evidence needed
+- the negative cases that must not trigger
+
+Examples:
+
+- "Score a goal" may be an incrementing score byte, but check both teams and
+  determine whether the design counts human goals or all goals.
+- "Win a match" requires a verified terminal result, not merely a positive
+  score or a return to a menu.
+- "Beat a league/team" needs a reliable opponent identity captured while it
+  is valid, plus a reliable win condition.
+- "Win with setting X on" needs the setting that actually reached kickoff,
+  not only an unlocked item or a value visible in a menu before a reset.
+
+4.2 Define the supported game context
+
+Record which modes, regions, languages, controller assignments, and emulator
+cores are supported. Decide what happens for:
+
+- two human controllers versus one human and CPU
+- home/away side selection
+- extra time, penalties, forfeits, and quit-to-title
+- exhibition, tournament, league, or practice modes
+- save-memory settings that override ROM defaults
+- unknown or partially initialized RAM values
+
+If a mode is not supported, gate it safely and say so. A check that never fires
+is better than a false check when a false check corrupts progression.
+
+4.3 Design for state transitions
+
+Model a match or menu as a state machine, for example:
+
+  disconnected -> title/menu -> team selection -> pre-game -> match
+              -> halftime -> terminal result -> return menu
+
+A transition should use enough independent evidence to avoid false positives.
+Use stable polling or debouncing where appropriate. Do not make one screen byte
+mean "match over" without checking task context and transition history.
+
+
+5. ROM IDENTITY AND REPRODUCIBLE BUILDS
+---------------------------------------
+5.1 Identify the exact retail image
+
+For every supported dump, record:
+
+- exact filename supplied by the user or distributor
+- file size
+- internal title and product code
+- region/language where known
+- MD5, SHA-1, and SHA-256
+- stored and recalculated cartridge checksum
+- any header copier prefix or byte-swapping transformation
+
+The hash is the identity. A filename alone is not enough. Two dumps can have
+the same title and different code, language, or address layout.
+
+A file extension such as `.md` may hold raw binary ROM data. Do not infer that
+it is a text document from the suffix. Validate its size and bytes.
+
+5.2 Keep vanilla immutable
+
+- Store or reference a known-good vanilla image without editing it.
+- Build to a separate output path; never patch a user's only copy in place.
+- Record the source hash in the patch metadata and generated reports.
+- Verify the hash before patching; abort on mismatch.
+- Do not regenerate, modify, or overwrite existing user seeds or patches unless
+  the owner explicitly requests it.
+- Use a disposable test directory for temporary ROMs and logs.
+- Never delete save files, archives, evidence, or ROMs merely because their
+  names look old. Get explicit, exact permission first.
+
+5.3 Update checksum and hashes after patching
+
+A Mega Drive checksum is not a cryptographic hash. Both are useful:
+
+- the cartridge checksum is an in-ROM compatibility field
+- SHA-256 identifies exact bytes for audit, comparison, and archive integrity
+
+After a patch, recalculate the console checksum and compute the output SHA-256.
+Keep source and output hashes distinct. Never label a patched image's hash as
+the vanilla hash.
+
+5.4 Make patching reproducible
+
+A build manifest should record the source hash, base-patch revision, seed
+values, generator version, world/game ID, and output checksum. The patch should
+fail closed if the source image or expected bytes differ.
+
+If several stages modify the ROM, define their order. Assert that later stages
+do not overwrite earlier hooks, markers, checksum fields, or seed data. Make
+re-running a stage idempotent where possible; otherwise detect and reject an
+already-patched or partially patched image.
+
+
+6. REVERSE ENGINEERING AND MEMORY MAPPING
+-----------------------------------------
+6.1 Start read-only
+
+Before changing bytes:
+
+1. Enumerate emulator domains and their sizes.
+2. Read the internal title and other known ROM-header fields.
+3. Find stable screen/task transitions with no writes.
+4. Record candidate RAM values before and after one controlled event.
+5. Repeat the event and include a negative control.
+6. Verify width, endian, lifetime, and whether the game rewrites the value.
+
+Do not begin by searching for a convenient free-looking RAM address and writing
+there. Existing games reuse nearly all memory over time.
+
+6.2 Change one variable at a time
+
+For a candidate field, vary exactly one game action while holding the rest
+constant. Examples: move one menu row, change one setting, score one goal,
+start a new match, or return to the title. Record frame number and state tuple.
+
+A controlled comparison should answer:
+
+- Did the game itself write the value?
+- Did it change before, during, or after the visible event?
+- Does it reset at kickoff, pause, halftime, or menu return?
+- Does the same value appear in an unrelated context?
+- Does the value vary with player side or CPU side?
+- Does the field survive a ROM reload or save-memory reload?
+
+6.3 Track field semantics, not just offsets
+
+For every mapped field record:
+
+- domain and address convention
+- full bus address and domain offset when both are relevant
+- width and endian
+- data type and valid values
+- state in which the value is meaningful
+- reset/update behavior
+- evidence category
+- supported ROM/core version
+
+A raw byte is not a semantic map. `0x03` might be a tab index, task state,
+setting value, or stale data depending on context.
+
+6.4 Use full signatures for screens and tasks
+
+Combine screen IDs, phase IDs, task pointers, data pointers, task type/state,
+score, and history as needed. Test the signature in more than one run. A stable
+poll count can suppress a one-frame transition, but it does not replace correct
+semantics.
+
+6.5 Beware of probe side effects
+
+Instruction tracing, Lua frame loops, watchpoints, and input automation can
+change timing or starve other coroutines. Prefer small non-blocking probes.
+Do not use a blocking `frameadvance` loop on a path that must service the AP
+connector. Distinguish an instrumentation performance issue from a game bug;
+logs alone may not establish the cause.
+
+
+7. SAFE 68000 ROM PATCHING
+--------------------------
+7.1 Confirm the instruction and its exact bytes
+
+Before patching a code site:
+
+- disassemble enough surrounding code to understand control flow
+- record the original bytes and instruction boundaries
+- verify all callers and return paths that matter
+- confirm registers and flags that the original instruction changes
+- determine whether the instruction is in ROM, RAM, a table, or an overlay
+
+If an expected byte pattern does not match, stop. Do not apply the patch at a
+nearby address or force it through.
+
+7.2 Respect immediate operand positions
+
+An instruction address is not necessarily the data address inside it. Example:
+
+  `move.l #mask,D1` = opcode bytes `22 3C` followed by a 4-byte big-endian mask
+
+If the opcode starts at ROM offset X, the immediate longword starts at X+2.
+Writing at X would corrupt the instruction. For every patch, distinguish:
+
+- instruction start
+- opcode/extension bytes
+- immediate data
+- following instruction
+
+7.3 Use code caves conservatively
+
+A free-looking region is not automatically safe. Before using a code cave:
+
+- verify the entire intended cave range is unused padding in the target base
+- verify it does not overlap another cave, table, marker, or checksum field
+- check branch displacement ranges and alignment
+- preserve registers and condition codes as required
+- replay displaced instructions or jump back at a valid boundary
+- assert the exact cave range and expected original hook bytes
+- verify the generated bytes are identical on a deterministic rebuild
+
+Do not infer a cave's size from one short probe. If any byte in the proposed
+range is not the expected fill value, abort or choose a new reviewed layout.
+
+7.4 Keep patch layers distinct
+
+A maintainable build separates:
+
+- common code patch
+- seed-specific mask/settings values
+- runtime mutable state
+- static strings and pointers
+- client-side behavior
+
+Use markers so a client can identify which optional feature set is present.
+A missing marker should disable that feature safely rather than trigger blind
+writes to addresses that may mean something else in an older patch.
+
+7.5 ROM writes at runtime are emulator-specific
+
+The FIFA 96 project confirmed that BizHawk's writable MD CART domain in the
+specified Genesis Plus GX setup changed bytes the CPU subsequently executed.
+That result is not universal. Another emulator, core, version, or memory domain
+may reject writes, keep a shadow copy, or expose different addresses. MAME and
+BizHawk did not behave identically in the project's write experiments.
+
+For each supported emulator:
+
+1. identify the domain
+2. write a harmless disposable test value in a test ROM
+3. read it back
+4. verify the game consumes it
+5. verify it still works after relevant transitions
+
+Do not promise live-ROM patching solely from an API saying that a domain is
+writable.
+
+
+8. ARCHIPELAGO WORLD, ITEMS, AND LOCATIONS
+------------------------------------------
+8.1 Make the item pool mathematically exact
+
+Let the intended checks, filler, and starting inventory be explicit. Verify:
+
+- every location has a unique, stable ID
+- every item has a unique, stable ID
+- item-pool size matches the generator's required count
+- starting items do not also remain in the pool unless intended
+- no unsupported item is silently discarded
+- filler completion is deterministic and documented
+- each player's starting league/settings agree with slot data and patch bytes
+
+Test both valid settings and invalid combinations. Invalid inputs should raise
+clear errors rather than quietly create a broken seed.
+
+8.2 Define item effects as desired state
+
+Prefer recomputing the desired game state from inventory:
+
+  desired_mask = starting_bits OR all received unlock bits
+
+Then compare desired state with the live emulator state, write if different,
+and read back. This is safer than blindly incrementing a counter or toggling a
+bit every time an item message is replayed.
+
+The operation must be idempotent. Reconnects, duplicate network delivery, a
+client restart, or an emulator reset must not double-apply an item or remove an
+already enabled option.
+
+8.3 Keep game rules and client behavior aligned
+
+The world rules determine what is reachable. The ROM/client implementation
+determines what is actually observable and unlockable. Validate that:
+
+- every rule refers to a real item or event
+- starting access is possible
+- an unlock item changes the intended menu/game behavior
+- the client derives checks from the same semantic model as the world
+- the goal condition cannot be satisfied by unrelated transitions
+- accessibility options are tested in the intended control flow
+
+8.4 Keep names and IDs stable
+
+Once seeds and patches exist, item IDs, location IDs, game IDs, and patch
+extensions become compatibility contracts. If a game identifier is renamed,
+consider old patch manifests explicitly. If a location is renamed, do not
+silently reassign its numeric ID to a different event.
+
+The patch manifest's exact `game` value must match the world identity used by
+the host for association and download. Test the real host/client workflow, not
+only the local generator.
+
+
+9. EMULATOR CLIENT AND RUNTIME STATE MANAGEMENT
+-----------------------------------------------
+9.1 Validate the running image
+
+At connection time, validate as much as practical:
+
+- internal ROM title and product field
+- expected ROM size or supported region
+- AP feature markers, when the feature requires them
+- optional static bytes at critical hooks
+- correct emulator domain and memory size
+
+Do not write seed memory until the correct game and domain are established.
+A vanilla game and a patched game can share the same internal title.
+
+9.2 Batch reads and avoid blocking the game
+
+Read related values in a single batch when the emulator API allows it. Use a
+non-blocking client loop with bounded work per poll. Avoid scanning all 64 KiB
+every frame unless profiling shows it is safe and necessary.
+
+Cache emulator domains only while they remain valid. If the ROM reloads or the
+emulator changes core/domain, invalidate cached applied-state assumptions and
+re-read the live values.
+
+9.3 Separate observation, decisions, and writes
+
+A robust poll should conceptually:
+
+1. read screen/task/score/settings state
+2. classify the current game state
+3. update latches and state-machine transitions
+4. decide whether a check is valid
+5. decide whether a memory write is needed
+6. write, then verify read-back
+7. send AP messages only once per event
+
+Do not let one noisy memory sample directly send a check or overwrite a
+previously valid opponent/setting value. Reject impossible values and preserve
+the last valid observation when appropriate.
+
+9.4 Recover after restart and reconnect
+
+On connect/reconnect or emulator reset:
+
+- rebuild desired unlock masks from the current received-item inventory
+- read live ROM/RAM state before assuming writes are present
+- reapply only if live state differs from desired state
+- restore cumulative goal progress from checked locations or a durable source
+- avoid recounting the previous match's score when a new kickoff resets scores
+- do not resend already checked locations
+
+For an unlock mask, OR the starting bit and all item bits. Do not use a volatile
+client cache as the only source of truth.
+
+9.5 Capture volatile values at the right time
+
+Some menu settings are valid only while their task is active and can be cleared
+or reused on exit. Capture the value during the appropriate menu, latch it,
+and confirm the value that reached kickoff. Do not assume that a menu value is
+still valid after a transition.
+
+A value read in a settings screen, a value written by the client, a value read
+back, and a value actually used in gameplay are four different evidence points.
+
+
+10. DESIGNING CHECKS AND ACHIEVEMENTS
+-------------------------------------
+10.1 Distinguish score, goal, win, and completion
+
+These are different events:
+
+- score changed
+- a goal animation occurred
+- the human player's team scored
+- a match was won
+- the game reached its native terminal result state
+- a tournament or game goal completed
+
+A score byte can prove a score change without identifying the human player or
+proving a win. A return to a title screen can follow a win, a loss, or a quit.
+
+10.2 Identify teams at selection time
+
+Team IDs and league tabs may be available on SELECT TEAM, then reused by the
+game during play. Capture the candidate team ID and opponent tab only when the
+selection screen and its task are valid. Latch them for the match. Verify the
+mapping against the game's ROM team table and test both controller assignments.
+
+Do not assume:
+
+- Team 1 means human player
+- Home means Player 1
+- P2 tab remains a league ID during gameplay
+- a team ID equals a league/tab ID
+- a pointer into a team table is an integer team ID
+
+10.3 Use a real terminal condition for win checks
+
+A reliable win check should require a confirmed terminal state and a valid
+match result in the right context. Test at minimum:
+
+- win
+- loss
+- draw
+- quit after scoring
+- quit before scoring
+- menu exit before kickoff
+- halftime and extra-time transitions
+- second match after a prior score
+- home/away and controller assignment changes
+
+A reset of score to 0-0 may mean a new kickoff, but it can also happen after an
+aborted flow. Do not use it alone as proof that the prior match was won.
+
+10.4 Make goal counters cumulative and idempotent
+
+If the design counts total goals across matches:
+
+- accumulate only positive score deltas observed during a valid match
+- track both team score bytes if the design counts all goals
+- reset the per-match baseline at kickoff without resetting lifetime progress
+- send each threshold once
+- restore cumulative progress on reconnect
+- test score wrap/reset and game-load behavior
+
+If the design counts only human goals, identify which team is human in the
+current controller configuration. Do not assume a fixed score byte.
+
+10.5 Keep RetroAchievements independent from AP check bookkeeping
+
+An AP location, an AP item receipt, a Universal Tracker result, and a
+RetroAchievements award are separate systems. Validate each independently.
+A tracker showing all expected locations does not by itself prove the emulator
+client sent every check. An AP check does not by itself prove an RA condition
+will be robust.
+
+For RA conditions, document the target ROM hash/revision, address and width,
+comparison semantics, reset behavior, and any task/screen guard. Prefer a
+stable state over a one-frame display pulse. Do not publish an achievement
+condition based on a candidate field or an unverified memory-domain alias.
+
+
+11. SETTINGS, MENUS, AND VISUAL BEHAVIOR
+----------------------------------------
+11.1 A menu label is not a setting value
+
+Distinguish:
+
+- menu row index
+- text/string pointer
+- lock/unlock mask
+- visible On/Off value
+- value stored in RAM
+- value latched for the next match
+- value actually used during play
+
+A grayed label can still be navigable; a menu can display On while the game
+resets the underlying value before kickoff. Verify menu input, memory value,
+read-back, kickoff state, and gameplay effect separately.
+
+11.2 Preserve simultaneous options
+
+When multiple options can be enabled together:
+
+- use independent bits or an accurately decoded field
+- update only the intended bit
+- preserve other active options
+- test each option alone and all supported combinations together
+- record the complete values at menu exit and kickoff
+
+Never claim that the user turned an option off unless the relevant log or capture
+proves it. A multi-option test must verify every option remains On at kickoff,
+not merely that each item was received at some earlier point.
+
+11.3 Treat native menu tasks carefully
+
+A menu action may be dispatched by a task manager, jump table, or delayed
+teardown path. A nearby video-clear helper is not necessarily the item's action.
+Trace the full call/return and task lifecycle before redirecting a menu item.
+
+When changing an input path, preserve other entry points. A guard at a ROM
+branch is not equivalent to a runtime screen detector; document exactly which
+leaves it covers and which remain untested.
+
+11.4 Test visual and functional behavior separately
+
+For each setting or lock:
+
+- Does the cursor skip locked choices?
+- Is the label gray/white as intended?
+- Does the displayed value change correctly?
+- Does the RAM value change and remain stable?
+- Does the game use it at kickoff?
+- Does it affect the actual match?
+
+A code path that changes memory but not the visible screen is not a complete
+UI feature. A gray label without an input guard is not a complete lock.
+
+
+12. TESTING IN STAGES
+---------------------
+Use staged gates. Do not call a later gate passed because an earlier one passed.
+
+Stage 1: Static source and design
+  Check IDs, item counts, masks, enum ranges, ROM offsets, expected bytes, and
+  branch/cave bounds. Run offline unit tests and deterministic build checks.
+
+Stage 2: Patch construction
+  Build into a disposable location. Verify output size, checksum, critical
+  bytes, markers, code caves, all seed immediates, and output SHA-256.
+
+Stage 3: Emulator domain validation
+  Identify the exact target core and memory domains. Validate read addresses,
+  widths, and endian with known fields. Test writes only on a disposable image.
+
+Stage 4: Menu behavior
+  Confirm entry screen, focus, navigation, locked choices, wrap, labels, and
+  default landing. Test the correct controller and pad separately.
+
+Stage 5: Gameplay behavior
+  Start a real match. Confirm settings at kickoff, scores, goal updates, team
+  identity, halftime, full-time, result screen, and quit behavior.
+
+Stage 6: Archipelago end-to-end
+  Use a real local AP server/client and a test seed created for that test. Verify
+  authentication, slot data, starting items, checks, item delivery, write and
+  read-back, reconnect, reset, and victory. Keep mock tests labelled as mocks.
+
+Stage 7: Regression and release
+  Test a fresh boot, an existing valid save, a ROM reload, multiple items, all
+  simultaneous options, supported controller layouts, and legacy patch imports.
+  Recompute all hashes and inspect the final package before release.
+
+For every stage, state what is not tested. Do not claim full E2E success from
+static analysis, a mock, a single memory read, a screenshot, or a partial match.
+
+
+13. EVIDENCE, BETA OPERATIONS, AND PRESERVATION
+----------------------------------------------
+13.1 Make evidence reproducible
+
+For each run, capture enough to reproduce the claim:
+
+- exact vanilla or patched ROM hash
+- emulator and core version
+- AP world/patch version and relevant seed/slot settings
+- start state and whether a save state or existing SRAM was used
+- frame/time, inputs, memory samples, client messages, and server messages
+- screenshots when visual behavior is part of the claim
+- expected result, actual result, and explicit pass/partial/fail status
+
+A checksum for an archive proves its bytes did not change; it does not prove the
+contents are correct. Use SHA-256 plus a byte comparison when exact identity
+matters.
+
+13.2 Do not mix test types
+
+Clearly label:
+
+- unit test
+- offline patch test
+- emulator read/write bench
+- visually observed menu test
+- real match test
+- real AP server/client E2E
+- RetroAchievements/Universal Tracker test
+
+A mocked score increment is useful for client logic but is not a natural game
+goal. A manual server item can verify item receipt but not the location that
+would normally send it. A visible label substitution does not prove internal
+team identity.
+
+13.3 Respect the operator's testing boundary
+
+When a user owns a live game or beta session:
+
+- do not start another emulator, client, server, or game without permission
+- do not send inputs or modify their running state unless explicitly asked
+- analyze the supplied traces and request only the evidence needed
+- do not infer a root cause from timing or lag without proof
+- keep a low-priority diagnostic issue low priority unless the owner changes it
+
+13.4 Preserve user artifacts
+
+- Do not modify or regenerate existing seeds, patches, or beta archives without
+  explicit permission.
+- Do not delete ROMs, save-memory files, logs, screenshots, or test evidence by
+  filename pattern alone.
+- Keep temporary test outputs separate from user-owned deliverables.
+- When deletion is authorized, use exact paths and verify the resulting state.
+- Keep the vanilla ROM and a known-good release artifact recoverable.
+
+
+14. RELEASE AND COMPATIBILITY RULES
+-----------------------------------
+14.1 Stable identifiers and patch containers
+
+Keep game ID, patch extension, item IDs, location IDs, and manifest semantics
+stable. If you need to rename an ID, explicitly support old manifests where
+required. Test the actual upload/download association in the AP host; a patch
+that builds locally can still fail room association.
+
+14.2 Canonical package naming
+
+Use one canonical current APWorld package name when that is the project
+contract. Put release version information in metadata, changelog text, or
+internal package data rather than creating a chain of numbered distributable
+filenames. For the FIFA 96 project, the latest package must keep its canonical
+name `fifa96.apworld`.
+
+14.3 Deliver small, auditable releases
+
+A release should include only the intended world, patch behavior, and necessary
+metadata. Confirm that development helpers, temporary seeds, save states,
+private credentials, and unrelated logs are not bundled. Preserve the previous
+canonical artifact until the new one passes the agreed validation gates.
+
+14.4 Compatibility checks
+
+Test:
+
+- current patch imports
+- older patches with known legacy game IDs
+- host room patch visibility/download
+- generated patch applied to the exact supported vanilla hash
+- output ROM boot and core memory checks
+- client behavior with supported and unsupported patch markers
+
+If an old patch lacks a feature marker, disable that optional feature safely;
+do not assume that the patch contains current code caves or runtime bytes.
+
+
+15. FIFA 96 CASE STUDY: CONCRETE LESSONS
+---------------------------------------
+These values apply to the specific 2 MiB USA/Europe multi-language dump used in
+the project. The vanilla image SHA-256 is:
+
+  6a4d606c6f1fa8930e00d317dc8d3edee8f54ac2df2ac835bcb6be6777c35b01
+
+15.1 Domain and screen mapping
+
+- BizHawk Genesis Plus GX 68K RAM offsets were the low 16 bits of the MAME
+  0xFFxxxx address; MD CART was a ROM file-offset domain in that tested setup.
+- Screen bytes: E7 at 0xFF03E7, E8 at 0xFF03E8, and F5 at 0xFF03F5.
+- Observed pairs: title hub 94/77, post-match Select Mode 77/87, SELECT TEAM
+  56/0D with E8=00, Controllers 22/1D, and PRE GAME BC/E0.
+- These pairs are context markers, not standalone proof of a win or full-time.
+
+15.2 Team selection
+
+- P1 tab: 16-bit word at 0xFF03B0.
+- P2/opponent-panel tab: 16-bit word at 0xFF03B2.
+- P1/Home team-record index candidate: word at 0xFF03B4.
+- SELECT TEAM focus: word at 0xFF03BC. Values 0 through 3 select the tab row,
+  P1 team row, P2 team row, and Player Position Select flow.
+- The tabs are reused during gameplay. The opponent tab must be captured during
+  SELECT TEAM, not read later from an in-match value.
+- A navigation mistake initially made the mask look broken: pressing UP on P1
+  and P2 could focus the P2 panel. The correct test for tab cycling used P1 UP
+  alone to focus the tab row, then RIGHT/LEFT. This is specific to the observed
+  FIFA 96 menu and must not be generalized to another game.
+
+15.3 League mask and code patch
+
+The AP SELECT TEAM mask is a 32-bit big-endian immediate loaded by `move.l
+#mask,D1` in four AP-base cores. The instruction starts are 0x7F00, 0x7F8A,
+0x1FC82A, and 0x1FD570. The mask longword is at each instruction start + 2.
+The vanilla dump had 0xFF padding at these code locations; the AP base installs
+the instructions first.
+
+Current playable tab bits are 0-11 and 13-17; bit 12 is a dead/blank tab. The
+corrected visible labels include AFC=11, CAF=13, CONCACAF=14, CONMEBOL=15,
+OFC=16, UEFA=17. An early map shifted the later confederation bits; that mapping
+was corrected after direct label and tab investigation.
+
+P1/P2 default-tab immediates are at ROM offsets 0x92E60 and 0x92E66. The
+current seed path sets the defaults to the starting tab. In BizHawk 2.10 / GX,
+writing the four MD CART mask longwords at +2 was observed to change tabs while
+the menu remained open. Do not assume the same live-write behavior in MAME or
+another core without testing it.
+
+A RAM-mask prototype at MAME 0xFF0A00 (BizHawk offset 0x0A00) failed because
+the game used that address and overwrote the injected value. The observation
+was 0x02F802F1 at park. The lesson is to prove an address is free across the
+whole relevant lifecycle, not just at boot.
+
+15.4 Scores, clock, and wins
+
+- Team 1 score: byte at 0xFFF8B5.
+- Team 2 score: byte at 0xFFF8B6.
+- These score bytes were initialized at kickoff and changed on natural goals.
+  Team 1/2 did not mean human/CPU in every controller setup.
+- 0xFFF8A5 tracked displayed seconds in captures. 0xFFF8A7 was related but
+  diverged; 0xFFF89F remained unresolved.
+- The earlier hypothesis that the clock neighborhood stored opponent identity
+  was disproved.
+- No stable generic full-time RAM byte was mapped. A full task-0 Game Over
+  tuple was observed, while the E7/F5 pair varied across captures.
+- A later user report described a false-positive victory check after leaving a
+  match after scoring. That report does not invalidate the score map, but it
+  means a score reset or title return must not be treated as a proven win.
+
+15.5 Settings and Specials
+
+- Language byte 0xFFE2E4, English=0.
+- Weather byte 0xFFE2E9: 0 Dry, 1 Damp, 2 Drenched, 3 Hot.
+- Half Length byte 0xFFE2EC: 0 two minutes, 1 four minutes in observed setup.
+- Skill byte 0xFFE2F0: 0 Semi-Pro, 1 Pro.
+- Special value words 0xFFE320 and 0xFFE322; AP-mapped word-0 bits:
+  Invisible Walls 0x0001, Curve Ball 0x0002, Crazy Ball 0x0004,
+  Balloon Ball 0x0100.
+- AP unlock masks are separate ROM bytes at 0x1FE100-0x1FE103. They must not
+  be confused with the game values in 68K RAM.
+- A setting must be tested at menu, at kickoff, and through its gameplay effect.
+  The value can be reset between those phases; simultaneous options need a
+  single combined test.
+
+15.6 Champions task transition
+
+A cold title-hub task-0 signature was observed with update 0x92410, render
+0x91BCE, data pointer 0xFFFF1A36, type 0, state 2. The title-hub selector and
+guard words were at 0xFF1A38 and 0xFF1A3C; root pointer 0xFFE11A was zero in the
+accepted cold-hub case. The native path created task type 0x22.
+
+The AP build uses separate ROM bytes and markers for request, completion,
+team ID, and optional display hooks. Those are AP-only; the retail game does
+not contain them as gameplay RAM. The cold title-hub and post-match Select Mode
+handoffs are separate paths and were both confirmed in user-run E2E tests on
+2026-10-13. With no match played, the title-hub path used the France fallback
+(ID 80, palette 02/0B/03) and reached task type 0x22. In a separate post-match
+run, the Client waited for Select Mode, then the debugger observed the task-0
+state-0x40 route at E7/F5=0x77/0xBC, task type 0x22 appeared, the Client cleared
+the request, and the user confirmed the Champions screen with Zambia (ID 234,
+palette 00/06/03). The exact APWorld/seed version was not printed in the
+post-match logs, and the debugger did not establish the effective native PC/D0
+argument, so the end-to-end behavior is confirmed while that CPU-level detail
+remains open. Earlier candidate runs that fell into Select Team were genuine
+failures of those candidates, not the outcome of the later successful run.
+Directly forcing task state before native teardown caused an allocation error
+in a diagnostic attempt; preserve the game's task lifecycle and make hooks at
+verified entry points.
+
+15.7 AP host, package, and test lessons
+
+- The game ID in a patch manifest must match the world's game identity exactly
+  for host association. Existing patches with the legacy ID `Fifa96` require an
+  explicit compatibility path if the public ID is renamed.
+- The canonical current package name is `fifa96.apworld`; do not put a version
+  number in that filename.
+- Universal Tracker status is a separate result from in-game check receipt.
+  In this project, Universal Tracker was reported at 100%; that was not treated
+  as equivalent to the 127/127 AP location result or the separate Victory check.
+- Keep evidence attached to the exact run. The P9 run did not validate CONMEBOL;
+  a later P10 run did validate CONMEBOL and Scottish checks. Do not backdate or
+  merge a later pass into an earlier run.
+- A real natural-goal test, a manual server item, a mock memory update, and a
+  visible game effect prove different things. Label each evidence type.
+- Existing seeds, patches, and beta archives are immutable unless their owner
+  explicitly authorizes a specific change.
+
+
+16. PRE-RELEASE CHECKLIST
+-------------------------
+ROM and patch:
+
+[ ] Exact supported vanilla hash and size recorded.
+[ ] Region/revision support stated.
+[ ] Expected original bytes checked before each patch.
+[ ] Instruction start and immediate/data offsets distinguished.
+[ ] Code caves verified free and non-overlapping.
+[ ] 68000 big-endian writes use correct widths.
+[ ] ROM checksum recalculated after all edits.
+[ ] Output SHA-256 and reproducible build recorded.
+
+World and patch container:
+
+[ ] Game ID and patch manifest match exactly.
+[ ] Legacy patch compatibility decided and tested.
+[ ] Item/location IDs stable and unique.
+[ ] Pool counts, starting items, rules, and filler validated.
+[ ] Seed values and patch bytes agree.
+[ ] Patch downloads correctly from the target AP host.
+
+Memory and client:
+
+[ ] Emulator/core/domain names and sizes verified.
+[ ] RAM bus addresses and domain offsets are not mixed.
+[ ] Width, endian, lifetime, and context documented.
+[ ] Client reads reject invalid/noisy values.
+[ ] Received items rebuild desired state idempotently.
+[ ] Writes are read back and applied only when needed.
+[ ] Reconnect, reset, and ROM reload tested.
+
+Checks and achievements:
+
+[ ] Goal check requires a verified terminal state.
+[ ] Win, loss, draw, quit, halftime, and next kickoff tested.
+[ ] Human/CPU and home/away roles verified.
+[ ] Opponent identity is latched while valid.
+[ ] Cumulative goals do not double count after reset/reconnect.
+[ ] UI lock, memory value, kickoff value, and gameplay effect each verified.
+[ ] AP, Universal Tracker, and RetroAchievements results are reported separately.
+
+Evidence and release:
+
+[ ] Every claim has a stated evidence level.
+[ ] Partial, failed, and untested cases are recorded honestly.
+[ ] Test artifacts are disposable and separated from user-owned seeds/archives.
+[ ] No user artifact was modified or deleted without permission.
+[ ] Release package contains no development-only data or private credentials.
+[ ] The canonical release artifact has the correct stable filename.
+
+
+17. COMMON FAILURE PATTERNS
+---------------------------
+DO NOT:
+
+- patch a ROM whose hash or region is unknown
+- write a MAME address directly into a base-zero RAM domain
+- mistake an instruction start for the immediate operand address
+- assume a writable emulator domain means the game consumed the write
+- use an address because it looks unused in one screenshot or at boot
+- use a screen byte alone as a match result
+- interpret Team 1 as the human player without controller evidence
+- read a menu tab during gameplay after the game has reused the field
+- count a quit-to-title transition as a victory
+- treat a read-back, screenshot, mock, or unit test as full E2E proof
+- toggle settings blindly or lose simultaneously enabled options
+- keep AP item effects only in an in-memory client cache
+- let duplicate item delivery increment or toggle state twice
+- silently drop items, locations, or invalid seed settings
+- change a public game ID without considering old patch manifests
+- number a canonical APWorld package filename for this project
+- overwrite or regenerate user-owned seeds, archives, or patches without
+  explicit permission
+- remove evidence or saves based only on a filename pattern
+- diagnose a debugger or timing problem from correlation alone
+
+DO:
+
+- identify, map, and verify one field at a time
+- keep ROM, CPU bus, and emulator-domain addresses distinct
+- build deterministically from a known vanilla hash
+- make patches fail closed when bytes differ
+- use state machines, latches, stable polls, and idempotent writes
+- test both positive and negative cases in the correct game context
+- distinguish AP-only fields from vanilla game state
+- record exactly what was proven and what remains open
+- preserve user data and use disposable test outputs
+- keep this summary self-contained so a reader does not have to chase a chain
+  of side documents to understand the core workflow
