@@ -19,7 +19,9 @@ Each generated seed gives you these starting items:
 
 Play **Friendly** matches using the team tabs that Archipelago has unlocked.
 The game will keep other team groups locked until you receive their unlock
-items.
+items. Always play on the **Home** side (the team assigned to the left-hand
+controller). You may choose any team that Archipelago has unlocked; you are not
+restricted to your starting team group.
 
 Checks come from four kinds of achievements:
 
@@ -252,7 +254,9 @@ Chaque seed générée vous donne ces objets de départ :
 
 Jouez en mode **Friendly** avec les onglets d'équipes débloqués par Archipelago.
 Les autres groupes restent verrouillés jusqu'à la réception de leurs objets de
-déblocage.
+déblocage. Jouez toujours du côté **Home** (la manette située à gauche). Vous
+pouvez choisir n'importe quelle équipe débloquée par Archipelago; vous n'êtes
+pas limité à votre groupe d'équipes de départ.
 
 Les checks viennent de quatre types de progression :
 
